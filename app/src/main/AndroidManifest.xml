@@ -10,6 +10,7 @@
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />
 
+    <!-- Lector de QR de Google Play services (se descarga solo la primera vez). -->
     <application
         android:allowBackup="true"
         android:icon="@drawable/ic_launcher"
@@ -21,11 +22,19 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:launchMode="singleTask"
             android:screenOrientation="portrait"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- QR de «Vincular la app» en el perfil del CRM: oscrm-teleprompter://vincular?url=…&code=… -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="oscrm-teleprompter" android:host="vincular" />
             </intent-filter>
         </activity>
     </application>

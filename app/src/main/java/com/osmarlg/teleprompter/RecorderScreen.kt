@@ -285,9 +285,16 @@ fun RecorderScreen(
                 }
                 if (recorded[index] == true) {
                     Text("  ·  ✓ grabada", color = Color(0xFF34D399), fontSize = 13.sp)
+                } else if (toma.hecha) {
+                    Text("  ·  ✓ ya hecha", color = Color(0xFF34D399), fontSize = 13.sp)
                 }
-                when (Uploader.states[Uploader.key(guion.id, toma.orden)]) {
-                    UploadState.SUBIENDO -> Text("  ·  ↑ subiendo", color = Color(0xFFFBBF24), fontSize = 13.sp)
+                val uploadKey = Uploader.key(guion.id, toma.orden)
+                when (Uploader.states[uploadKey]) {
+                    UploadState.ESPERANDO -> Text("  ·  ↑ en fila", color = Color(0xFFFBBF24), fontSize = 13.sp)
+                    UploadState.SUBIENDO -> Text(
+                        "  ·  ↑ subiendo ${Uploader.progress[uploadKey] ?: 0}%",
+                        color = Color(0xFFFBBF24), fontSize = 13.sp,
+                    )
                     UploadState.SUBIDO -> Text("  ·  ☁ subida", color = Color(0xFF60A5FA), fontSize = 13.sp)
                     UploadState.ERROR -> Text(
                         "  ·  ⚠ reintentar",
@@ -297,22 +304,48 @@ fun RecorderScreen(
                     null -> {}
                 }
             }
+            toma.decir?.let {
+                Text(it, color = Color(0xFF9CA3AF), fontSize = 12.sp)
+            }
             Spacer(Modifier.height(8.dp))
             Box(Modifier.heightIn(max = (screenHeight * 0.38f).dp).verticalScroll(rememberScrollState())) {
-                Text(
-                    toma.texto,
-                    color = Color.White,
-                    fontSize = fontSize.sp,
-                    lineHeight = (fontSize * 1.25f).sp,
-                    fontWeight = FontWeight.SemiBold,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.fillMaxWidth(),
-                )
+                Column(Modifier.fillMaxWidth()) {
+                    if (toma.texto.isNotBlank()) {
+                        Text(
+                            toma.texto,
+                            color = Color.White,
+                            fontSize = fontSize.sp,
+                            lineHeight = (fontSize * 1.25f).sp,
+                            fontWeight = FontWeight.SemiBold,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    } else {
+                        Text(
+                            "Sin hablar",
+                            color = Color(0xFFFBBF24),
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                    toma.escena?.let { escena ->
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            escena,
+                            color = Color(0xFFD1D5DB),
+                            fontSize = if (toma.texto.isBlank()) (fontSize * 0.75f).sp else 13.sp,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                }
             }
             guion.tomas.getOrNull(index + 1)?.let { next ->
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    "Siguiente: ${next.texto}",
+                    "Siguiente: ${next.texto.ifBlank { next.escena.orEmpty() }}",
                     color = Color(0xFF9CA3AF), fontSize = 12.sp,
                     maxLines = 1, overflow = TextOverflow.Ellipsis,
                 )

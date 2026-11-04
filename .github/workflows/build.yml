@@ -2,7 +2,7 @@ name: Build APK
 
 on:
   push:
-    branches: [main]
+    branches: ['**']
   workflow_dispatch:
 
 permissions:
@@ -27,7 +27,24 @@ jobs:
         with:
           gradle-version: 8.14.3
 
+      # La llave de firma vive en los secretos del repo, nunca en el código.
+      - name: Llave de firma
+        env:
+          KEYSTORE_B64: ${{ secrets.TELEPROMPTER_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/teleprompter.keystore"
+            echo "TELEPROMPTER_KEYSTORE_FILE=$RUNNER_TEMP/teleprompter.keystore" >> "$GITHUB_ENV"
+          elif [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            echo "Falta el secreto TELEPROMPTER_KEYSTORE_B64: no se publica un APK firmado con otra llave." >&2
+            exit 1
+          fi
+
       - name: Compilar APK
+        env:
+          TELEPROMPTER_KEYSTORE_PASSWORD: ${{ secrets.TELEPROMPTER_KEYSTORE_PASSWORD }}
+          TELEPROMPTER_KEY_ALIAS: ${{ secrets.TELEPROMPTER_KEY_ALIAS }}
+          TELEPROMPTER_KEY_PASSWORD: ${{ secrets.TELEPROMPTER_KEY_PASSWORD }}
         run: gradle :app:assembleDebug --no-daemon --stacktrace
 
       - name: Renombrar APK
@@ -38,7 +55,9 @@ jobs:
           name: teleprompter-apk
           path: teleprompter-v${{ github.run_number }}.apk
 
+      # Solo main publica en Releases; las otras ramas solo compilan (y dejan el APK como artefacto).
       - name: Publicar release
+        if: github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

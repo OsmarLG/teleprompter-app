@@ -16,19 +16,26 @@ android {
         versionName = "1.0.${System.getenv("GITHUB_RUN_NUMBER") ?: "0"}"
     }
 
+    // La llave de firma NO está en el repo: GitHub Actions la arma desde sus secretos (TELEPROMPTER_KEYSTORE_B64 y
+    // contraseñas) para que cada APK nuevo se instale encima del anterior. En una compu sin esa llave se usa la
+    // llave de depuración de Android Studio.
+    val keystorePath = System.getenv("TELEPROMPTER_KEYSTORE_FILE")
     signingConfigs {
-        // Llave fija para que cada APK nuevo se instale encima del anterior
-        getByName("debug") {
-            storeFile = rootProject.file("app-debug.keystore")
-            storePassword = "android"
-            keyAlias = "androiddebugkey"
-            keyPassword = "android"
+        if (!keystorePath.isNullOrBlank()) {
+            create("ci") {
+                storeFile = file(keystorePath)
+                storePassword = System.getenv("TELEPROMPTER_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("TELEPROMPTER_KEY_ALIAS")
+                keyPassword = System.getenv("TELEPROMPTER_KEY_PASSWORD")
+            }
         }
     }
 
     buildTypes {
         debug {
-            signingConfig = signingConfigs.getByName("debug")
+            if (!keystorePath.isNullOrBlank()) {
+                signingConfig = signingConfigs.getByName("ci")
+            }
         }
     }
 
@@ -55,6 +62,10 @@ dependencies {
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.activity:activity-compose:1.9.3")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
+
+    // Lector de QR de Google (para vincular la app con el CRM); no pide permiso de cámara.
+    implementation("com.google.android.gms:play-services-code-scanner:16.1.0")
 
     implementation("androidx.camera:camera-core:$camerax")
     implementation("androidx.camera:camera-camera2:$camerax")

@@ -1,9 +1,13 @@
 package com.osmarlg.teleprompter
 
+import android.content.Context
 import android.content.pm.PackageManager
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,6 +23,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -27,7 +32,9 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
@@ -43,15 +50,23 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import com.google.mlkit.vision.barcode.common.Barcode
+import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
+import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
 import kotlinx.coroutines.launch
+
+private val Muted = Color(0xFF9CA3AF)
+private val Warn = Color(0xFFFBBF24)
 
 @Composable
 fun ScriptsScreen(prefs: Prefs, onOpen: (Guion) -> Unit) {
@@ -61,32 +76,54 @@ fun ScriptsScreen(prefs: Prefs, onOpen: (Guion) -> Unit) {
     var message by remember { mutableStateOf<String?>(null) }
     var showSettings by remember { mutableStateOf(false) }
     var reloadTick by remember { mutableIntStateOf(0) }
+    var modeFilter by remember { mutableStateOf<String?>(null) }
+    val sessionVersion = AppEvents.sessionVersion
 
     fun fromCacheOrDemo(): List<Guion> =
         runCatching { GuionParser.parse(prefs.cache) }.getOrNull()?.takeIf { it.isNotEmpty() }
             ?: GuionParser.parse(DEMO_JSON)
 
-    LaunchedEffect(reloadTick) {
-        if (prefs.apiUrl.isBlank()) {
-            guiones = GuionParser.parse(DEMO_JSON)
-            message = "Modo demo. Pon la URL de tu API en Ajustes."
-            return@LaunchedEffect
+    LaunchedEffect(reloadTick, sessionVersion) {
+        val url: String
+        val token: String
+        when {
+            prefs.signedIn -> { url = Crm.guionesUrl(prefs.crmUrl); token = prefs.crmToken }
+            prefs.apiUrl.isNotBlank() -> { url = Api.guionesUrl(prefs.apiUrl); token = prefs.apiToken }
+            else -> {
+                guiones = GuionParser.parse(DEMO_JSON)
+                message = "Modo demo. Inicia sesión con tu usuario del CRM en Ajustes."
+                return@LaunchedEffect
+            }
         }
         loading = true
         message = null
         try {
-            val raw = Api.fetch(Api.guionesUrl(prefs.apiUrl), prefs.apiToken)
+            val raw = Api.fetch(url, token)
             val parsed = GuionParser.parse(raw)
             prefs.cache = raw
             guiones = parsed
-            if (parsed.isEmpty()) message = "La API no regresó guiones con tomas."
+            if (parsed.isEmpty()) {
+                message = if (prefs.signedIn) "No tienes guiones pendientes por grabar." else "La API no regresó guiones con tomas."
+            }
+        } catch (e: Crm.CrmException) {
+            if (e.status == 401 && prefs.signedIn) {
+                prefs.signOut()
+                guiones = GuionParser.parse(DEMO_JSON)
+                message = "La sesión se cerró. Vuelve a iniciar sesión en Ajustes."
+            } else {
+                guiones = fromCacheOrDemo()
+                message = "${e.message} Mostrando lo último guardado."
+            }
         } catch (e: Exception) {
             guiones = fromCacheOrDemo()
-            message = "No se pudo cargar la API (${e.message}). Mostrando lo último guardado."
+            message = "Sin conexión (${e.message}). Mostrando lo último guardado."
         } finally {
             loading = false
         }
     }
+
+    val modes = guiones.mapNotNull { g -> g.modo?.let { it to (g.modoLabel ?: it) } }.distinct()
+    val visible = guiones.filter { modeFilter == null || it.modo == modeFilter }
 
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Column(Modifier.fillMaxSize().safeDrawingPadding()) {
@@ -94,18 +131,30 @@ fun ScriptsScreen(prefs: Prefs, onOpen: (Guion) -> Unit) {
                 Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("Guiones", fontSize = 26.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                Column(Modifier.weight(1f)) {
+                    Text("Guiones", fontSize = 26.sp, fontWeight = FontWeight.Bold)
+                    if (prefs.signedIn && prefs.crmUser.isNotBlank()) {
+                        Text(prefs.crmUser, fontSize = 13.sp, color = Muted)
+                    }
+                }
                 TextButton(onClick = { reloadTick++ }) { Text("⟳ Recargar") }
                 TextButton(onClick = { showSettings = true }) { Text("⚙ Ajustes") }
             }
 
             message?.let {
-                Text(
-                    it,
-                    color = Color(0xFFFBBF24),
-                    fontSize = 13.sp,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                )
+                Text(it, color = Warn, fontSize = 13.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+            }
+
+            if (modes.size > 1) {
+                Row(
+                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    FilterChip(selected = modeFilter == null, onClick = { modeFilter = null }, label = { Text("Todos") })
+                    modes.forEach { (mode, label) ->
+                        FilterChip(selected = modeFilter == mode, onClick = { modeFilter = mode }, label = { Text(label) })
+                    }
+                }
             }
 
             if (loading) {
@@ -118,27 +167,7 @@ fun ScriptsScreen(prefs: Prefs, onOpen: (Guion) -> Unit) {
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                items(guiones, key = { it.id }) { g ->
-                    Card(
-                        modifier = Modifier.fillMaxWidth().clickable { onOpen(g) },
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                    ) {
-                        Column(Modifier.padding(16.dp)) {
-                            Text(g.titulo, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
-                            Spacer(Modifier.height(4.dp))
-                            val dur = if (g.duracionTotal > 0) " · ~${g.duracionTotal} s" else ""
-                            Text("${g.tomas.size} tomas$dur", fontSize = 13.sp, color = Color(0xFF9CA3AF))
-                            Spacer(Modifier.height(6.dp))
-                            Text(
-                                g.tomas.first().texto,
-                                fontSize = 14.sp,
-                                color = Color(0xFFD1D5DB),
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                    }
-                }
+                items(visible, key = { it.id }) { g -> ScriptCard(g) { onOpen(g) } }
             }
         }
     }
@@ -152,36 +181,164 @@ fun ScriptsScreen(prefs: Prefs, onOpen: (Guion) -> Unit) {
 }
 
 @Composable
+private fun ScriptCard(g: Guion, onClick: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    g.titulo,
+                    fontSize = 18.sp, fontWeight = FontWeight.SemiBold, color = Color.White,
+                    modifier = Modifier.weight(1f),
+                )
+                if (g.mio) {
+                    Text(
+                        "Tuyo",
+                        fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF0B0F17),
+                        modifier = Modifier.clip(RoundedCornerShape(50)).background(Color(0xFF34D399))
+                            .padding(horizontal = 8.dp, vertical = 2.dp),
+                    )
+                }
+            }
+            val meta = listOfNotNull(g.cliente, g.modoLabel, g.fecha).joinToString(" · ")
+            if (meta.isNotBlank()) {
+                Spacer(Modifier.height(2.dp))
+                Text(meta, fontSize = 13.sp, color = Color(0xFF60A5FA))
+            }
+            Spacer(Modifier.height(4.dp))
+            val dur = if (g.duracionTotal > 0) " · ~${g.duracionTotal} s" else ""
+            val done = if (g.piezaId != null) " · ${g.hechas}/${g.tomas.size} hechas" else ""
+            Text("${g.tomas.size} tomas$done$dur", fontSize = 13.sp, color = Muted)
+            Spacer(Modifier.height(6.dp))
+            val first = g.tomas.first()
+            Text(
+                first.texto.ifBlank { first.escena.orEmpty() },
+                fontSize = 14.sp, color = Color(0xFFD1D5DB),
+                maxLines = 2, overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+/** Escanea el QR de «Vincular la app» del perfil del CRM con el lector de Google (no pide permiso de cámara). */
+fun scanPairingQr(context: Context, onResult: (Crm.Pairing?) -> Unit) {
+    val options = GmsBarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build()
+    GmsBarcodeScanning.getClient(context, options).startScan()
+        .addOnSuccessListener { barcode -> onResult(Crm.parsePairing(barcode.rawValue)) }
+        .addOnFailureListener { onResult(null) }
+}
+
+@Composable
 private fun SettingsDialog(prefs: Prefs, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var signedIn by remember { mutableStateOf(prefs.signedIn) }
+    var email by remember { mutableStateOf(prefs.crmEmail) }
+    var password by remember { mutableStateOf("") }
+    var crmUrl by remember { mutableStateOf(prefs.crmUrl) }
+    var busy by remember { mutableStateOf(false) }
+    var authError by remember { mutableStateOf<String?>(null) }
+    var showAdvanced by remember { mutableStateOf(false) }
+
     var url by remember { mutableStateOf(prefs.apiUrl) }
     var token by remember { mutableStateOf(prefs.apiToken) }
     var countdown by remember { mutableIntStateOf(prefs.countdown) }
     var autoStop by remember { mutableStateOf(prefs.autoStop) }
     var autoAdvance by remember { mutableStateOf(prefs.autoAdvance) }
     var autoUpload by remember { mutableStateOf(prefs.autoUpload) }
+    var keepLocal by remember { mutableStateOf(prefs.keepLocal) }
     var volumeMode by remember { mutableStateOf(prefs.volumeMode) }
 
+    fun signedInWith(serverUrl: String, session: Crm.Session) {
+        prefs.signIn(serverUrl, session)
+        signedIn = true
+        password = ""
+        authError = null
+        AppEvents.sessionVersion++
+        Uploader.resumePending(context, prefs)
+        Toast.makeText(context, "Sesión iniciada: ${session.userName}", Toast.LENGTH_SHORT).show()
+    }
+
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { if (!busy) onDismiss() },
         title = { Text("Ajustes") },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
-                OutlinedTextField(
-                    value = url, onValueChange = { url = it },
-                    label = { Text("URL base de la API") },
-                    placeholder = { Text("https://mi-api.com/api") },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = token, onValueChange = { token = it },
-                    label = { Text("Token (opcional)") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Spacer(Modifier.height(16.dp))
+                Text("Cuenta del CRM", fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(6.dp))
+                if (signedIn) {
+                    Text("${prefs.crmUser} · ${prefs.crmEmail}", fontSize = 14.sp)
+                    Text("Tus guiones salen de Grabaciones y cada toma se sube sola.", fontSize = 12.sp, color = Muted)
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedButton(enabled = !busy, onClick = {
+                        busy = true
+                        scope.launch {
+                            Crm.logout(prefs.crmUrl, prefs.crmToken)
+                            prefs.signOut()
+                            signedIn = false
+                            busy = false
+                            AppEvents.sessionVersion++
+                        }
+                    }) { Text("Cerrar sesión") }
+                } else {
+                    OutlinedTextField(
+                        value = email, onValueChange = { email = it },
+                        label = { Text("Correo") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    OutlinedTextField(
+                        value = password, onValueChange = { password = it },
+                        label = { Text("Contraseña") },
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    authError?.let { Text(it, color = Color(0xFFF87171), fontSize = 12.sp) }
+                    Spacer(Modifier.height(8.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(enabled = !busy && email.isNotBlank() && password.isNotBlank(), onClick = {
+                            busy = true
+                            authError = null
+                            scope.launch {
+                                try {
+                                    signedInWith(Crm.base(crmUrl), Crm.login(crmUrl, email, password))
+                                } catch (e: Exception) {
+                                    authError = e.message ?: "No se pudo iniciar sesión."
+                                } finally {
+                                    busy = false
+                                }
+                            }
+                        }) { Text(if (busy) "Entrando…" else "Entrar") }
+                        OutlinedButton(enabled = !busy, onClick = {
+                            scanPairingQr(context) { pairing ->
+                                if (pairing == null) {
+                                    authError = "No se leyó un QR del CRM. En tu perfil del CRM toca «Vincular la app con QR»."
+                                    return@scanPairingQr
+                                }
+                                busy = true
+                                scope.launch {
+                                    try {
+                                        signedInWith(Crm.base(pairing.url), Crm.pair(pairing))
+                                    } catch (e: Exception) {
+                                        authError = e.message ?: "No se pudo vincular."
+                                    } finally {
+                                        busy = false
+                                    }
+                                }
+                            }
+                        }) { Text("Vincular con QR") }
+                    }
+                }
+
+                Spacer(Modifier.height(12.dp))
+                HorizontalDivider()
+                Spacer(Modifier.height(12.dp))
 
                 Text("Cuenta regresiva", fontSize = 14.sp)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -195,7 +352,8 @@ private fun SettingsDialog(prefs: Prefs, onDismiss: () -> Unit) {
                 }
                 SwitchRow("Detener al terminar la duración", autoStop) { autoStop = it }
                 SwitchRow("Pasar a la siguiente toma al terminar", autoAdvance) { autoAdvance = it }
-                SwitchRow("Subir cada toma a la API", autoUpload) { autoUpload = it }
+                SwitchRow("Subir cada toma al terminar", autoUpload) { autoUpload = it }
+                SwitchRow("Conservar la copia en el celular después de subirla", keepLocal) { keepLocal = it }
 
                 Spacer(Modifier.height(8.dp))
                 Text("Botones de volumen / control Bluetooth", fontSize = 14.sp)
@@ -214,23 +372,56 @@ private fun SettingsDialog(prefs: Prefs, onDismiss: () -> Unit) {
                 Text(
                     if (volumeMode == VolumeMode.NAVEGAR) "Vol + siguiente · Vol − anterior"
                     else "Vol + grabar/detener · Vol − siguiente",
-                    fontSize = 12.sp, color = Color(0xFF9CA3AF),
+                    fontSize = 12.sp, color = Muted,
                 )
+
+                Spacer(Modifier.height(12.dp))
+                TextButton(onClick = { showAdvanced = !showAdvanced }) {
+                    Text(if (showAdvanced) "Ocultar avanzado" else "Avanzado")
+                }
+                if (showAdvanced) {
+                    OutlinedTextField(
+                        value = crmUrl, onValueChange = { crmUrl = it },
+                        label = { Text("Servidor del CRM") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text("API propia (solo sin sesión del CRM)", fontSize = 12.sp, color = Muted)
+                    OutlinedTextField(
+                        value = url, onValueChange = { url = it },
+                        label = { Text("URL base de la API") },
+                        placeholder = { Text("https://mi-api.com/api") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    OutlinedTextField(
+                        value = token, onValueChange = { token = it },
+                        label = { Text("Token (opcional)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
             }
         },
         confirmButton = {
-            Button(onClick = {
+            Button(enabled = !busy, onClick = {
+                if (!prefs.signedIn) prefs.crmUrl = crmUrl
                 prefs.apiUrl = url
                 prefs.apiToken = token
                 prefs.countdown = countdown
                 prefs.autoStop = autoStop
                 prefs.autoAdvance = autoAdvance
                 prefs.autoUpload = autoUpload
+                prefs.keepLocal = keepLocal
                 prefs.volumeMode = volumeMode
                 onDismiss()
             }) { Text("Guardar") }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar") } },
+        dismissButton = { TextButton(enabled = !busy, onClick = onDismiss) { Text("Cancelar") } },
     )
 }
 
