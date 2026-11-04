@@ -1,0 +1,17 @@
+{
+  "guiones": [
+    {
+      "id": "2026-11-10-tip-ventas",
+      "titulo": "Tip: 3 errores al vender por WhatsApp",
+      "fecha_publicacion": "2026-11-10",
+      "plataforma": "instagram",
+      "tomas": [
+        { "orden": 1, "texto": "Si vendes por WhatsApp, seguro estás cometiendo alguno de estos 3 errores.", "duracion": 4 },
+        { "orden": 2, "texto": "Error uno: contestar horas después. El cliente ya le compró a otro.", "duracion": 5 },
+        { "orden": 3, "texto": "Error dos: mandar el precio sin explicar el valor.", "duracion": 4 },
+        { "orden": 4, "texto": "Error tres: no dar seguimiento. Un mensaje a los dos días cambia todo.", "duracion": 5 },
+        { "orden": 5, "texto": "Sígueme para más tips de ventas y tecnología.", "duracion": 3 }
+      ]
+    }
+  ]
+}

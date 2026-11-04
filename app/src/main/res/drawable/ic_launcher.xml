@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path android:fillColor="#111827" android:pathData="M0,0h108v108h-108z" />
+    <!-- franja de texto (teleprompter) -->
+    <path android:fillColor="#FFFFFF" android:pathData="M26,28h56v5h-56z" />
+    <path android:fillColor="#9CA3AF" android:pathData="M32,38h44v4h-44z" />
+    <!-- cuerpo de cámara -->
+    <path android:fillColor="#F43F5E" android:pathData="M26,52h40a6,6 0,0 1,6 6v18a6,6 0,0 1,-6 6h-40a6,6 0,0 1,-6 -6v-18a6,6 0,0 1,6 -6z" />
+    <path android:fillColor="#F43F5E" android:pathData="M74,60l14,-7v28l-14,-7z" />
+    <path android:fillColor="#FFFFFF" android:pathData="M46,67m-7,0a7,7 0,1 1,14 0a7,7 0,1 1,-14 0" />
+</vector>
