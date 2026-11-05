@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -33,6 +34,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -65,8 +67,9 @@ import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
 import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
 import kotlinx.coroutines.launch
 
-private val Muted = Color(0xFF9CA3AF)
-private val Warn = Color(0xFFFBBF24)
+private val P get() = AppTheme.palette
+private val Muted get() = P.muted
+private val Warn get() = P.warn
 
 @Composable
 fun ScriptsScreen(
@@ -74,6 +77,7 @@ fun ScriptsScreen(
     onRecord: (Guion) -> Unit,
     onPiece: (Guion) -> Unit,
     onUploads: () -> Unit,
+    onView: (Archivo) -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     var guiones by remember { mutableStateOf<List<Guion>>(emptyList()) }
@@ -156,50 +160,58 @@ fun ScriptsScreen(
     val modes = guiones.mapNotNull { g -> g.modo?.let { it to (g.modoLabel ?: it) } }.distinct()
     val visible = guiones.filter { modeFilter == null || it.modo == modeFilter }
 
-    Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+    Surface(Modifier.fillMaxSize(), color = P.background) {
         Column(Modifier.fillMaxSize().safeDrawingPadding()) {
             Row(
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                Modifier.fillMaxWidth().padding(start = 20.dp, end = 16.dp, top = 14.dp, bottom = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column(Modifier.weight(1f)) {
-                    Text("Guiones", fontSize = 26.sp, fontWeight = FontWeight.Bold)
+                    Text("Guiones", fontSize = 28.sp, fontWeight = FontWeight.ExtraBold, color = P.text)
                     if (prefs.signedIn && prefs.crmUser.isNotBlank()) {
                         Text(
                             "${prefs.crmUser} ▾",
-                            fontSize = 13.sp, color = Color(0xFF60A5FA),
+                            fontSize = 13.sp, color = P.muted, maxLines = 1, overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.clickable { showAccounts = true },
                         )
                     }
                 }
-                TextButton(onClick = { reloadTick++ }) { Text("⟳") }
-                TextButton(onClick = { showSettings = true }) { Text("⚙ Ajustes") }
-            }
-
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                FilterChip(selected = !finished, onClick = { finished = false }, label = { Text("Por grabar") })
-                FilterChip(selected = finished, onClick = { finished = true; modeFilter = null }, label = { Text("Terminadas") })
-                Spacer(Modifier.weight(1f))
                 val active = Uploader.activeCount
                 val errors = Uploader.errorCount
                 if (Uploader.items.isNotEmpty()) {
+                    val color = if (errors > 0) P.error else if (active > 0) P.warn else P.info
                     Text(
                         when {
-                            errors > 0 -> "⚠ Subidas ($errors)"
-                            active > 0 -> "↑ Subiendo $active"
-                            else -> "☁ Subidas"
+                            errors > 0 -> "⚠ $errors"
+                            active > 0 -> "↑ $active"
+                            else -> "☁"
                         },
-                        color = if (errors > 0) Color(0xFFF87171) else if (active > 0) Warn else Color(0xFF60A5FA),
-                        fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+                        color = color, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1,
                         modifier = Modifier.clip(RoundedCornerShape(50)).clickable(onClick = onUploads)
-                            .background(Color.White.copy(alpha = 0.08f)).padding(horizontal = 10.dp, vertical = 6.dp),
+                            .background(color.copy(alpha = 0.16f)).padding(horizontal = 12.dp, vertical = 10.dp),
                     )
+                    Spacer(Modifier.width(8.dp))
                 }
+                if (loading) {
+                    Box(Modifier.size(42.dp), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = P.accent)
+                    }
+                } else {
+                    RoundIcon("⟳", { reloadTick++ })
+                }
+                Spacer(Modifier.width(8.dp))
+                RoundIcon("⚙", { showSettings = true })
             }
+
+            Segmented(
+                listOf("Por grabar", "Terminadas"),
+                if (finished) 1 else 0,
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+            ) { i ->
+                finished = i == 1
+                if (finished) modeFilter = null
+            }
+            Spacer(Modifier.height(10.dp))
 
             message?.let {
                 Text(it, color = Warn, fontSize = 13.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
@@ -230,18 +242,19 @@ fun ScriptsScreen(
                 }
             }
 
-            if (loading) {
-                Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator()
-                }
+            if (!loading && visible.isEmpty() && message == null) {
+                EmptyState(
+                    if (finished) "☁" else "✓",
+                    if (finished) "Todavía no hay piezas terminadas." else "No hay nada pendiente por grabar.",
+                )
             }
 
             LazyColumn(
                 contentPadding = PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(AppTheme.listGap),
             ) {
                 items(visible, key = { it.id }) { g ->
-                    ScriptCard(g, onPiece = { onPiece(g) }) { if (g.terminada) onPiece(g) else onRecord(g) }
+                    ScriptCard(g, onView = onView, onPiece = { onPiece(g) }) { if (g.terminada) onPiece(g) else onRecord(g) }
                 }
             }
         }
@@ -290,7 +303,7 @@ private fun AccountsDialog(prefs: Prefs, onAdd: () -> Unit, onDismiss: () -> Uni
                             Text(account.name.ifBlank { account.email }, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                             Text(account.email, fontSize = 12.sp, color = Muted)
                         }
-                        if (active) Text("✓", color = Color(0xFF34D399), fontSize = 18.sp)
+                        if (active) Text("✓", color = P.ok, fontSize = 18.sp)
                     }
                 }
             }
@@ -301,52 +314,66 @@ private fun AccountsDialog(prefs: Prefs, onAdd: () -> Unit, onDismiss: () -> Uni
 }
 
 @Composable
-private fun ScriptCard(g: Guion, onPiece: () -> Unit, onClick: () -> Unit) {
-    Card(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-    ) {
-        Column(Modifier.padding(16.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    g.titulo,
-                    fontSize = 18.sp, fontWeight = FontWeight.SemiBold, color = Color.White,
-                    modifier = Modifier.weight(1f),
-                )
-                if (g.mio) {
-                    Text(
-                        "Tuyo",
-                        fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF0B0F17),
-                        modifier = Modifier.clip(RoundedCornerShape(50)).background(Color(0xFF34D399))
-                            .padding(horizontal = 8.dp, vertical = 2.dp),
-                    )
-                }
-            }
-            val meta = listOfNotNull(g.cliente, g.modoLabel, g.fecha).joinToString(" · ")
-            if (meta.isNotBlank()) {
-                Spacer(Modifier.height(2.dp))
-                Text(meta, fontSize = 13.sp, color = Color(0xFF60A5FA))
-            }
-            if (!g.mio && !g.graba.isNullOrBlank()) {
-                Text("Lo graba ${g.graba}", fontSize = 13.sp, color = Warn)
-            }
-            Spacer(Modifier.height(4.dp))
-            val dur = if (g.duracionTotal > 0) " · ~${g.duracionTotal} s" else ""
-            val done = if (g.piezaId != null) " · ${g.hechas}/${g.tomas.size} hechas" else ""
-            val state = if (g.terminada) g.estado?.let { " · $it" }.orEmpty() else ""
-            Text("${g.tomas.size} tomas$done$dur$state", fontSize = 13.sp, color = Muted)
-            if (g.archivos > 0) {
-                Text(
-                    "☁ ${g.archivos} archivo(s) en el CRM · ver",
-                    fontSize = 13.sp, color = Color(0xFF60A5FA),
-                    modifier = Modifier.clip(RoundedCornerShape(6.dp)).clickable(onClick = onPiece).padding(vertical = 4.dp),
-                )
-            }
-            Spacer(Modifier.height(6.dp))
-            val first = g.tomas.first()
+private fun ScriptCard(g: Guion, onView: (Archivo) -> Unit, onPiece: () -> Unit, onClick: () -> Unit) {
+    StyledCard(stripe = if (g.terminada) P.ok else if (g.mio) P.accent else P.raised, onClick = onClick) {
+        Row(verticalAlignment = Alignment.Top) {
             Text(
-                first.resumen,
-                fontSize = 14.sp, color = Color(0xFFD1D5DB),
+                g.titulo,
+                fontSize = 18.sp, fontWeight = FontWeight.Bold, color = P.text, lineHeight = 23.sp,
+                modifier = Modifier.weight(1f),
+            )
+            if (g.mio) {
+                Spacer(Modifier.width(8.dp))
+                Badge("Tuyo", P.ok, filled = true)
+            }
+        }
+        val meta = listOfNotNull(g.cliente, g.modoLabel, g.fecha).joinToString(" · ")
+        if (meta.isNotBlank()) {
+            Spacer(Modifier.height(4.dp))
+            Text(meta, fontSize = 13.sp, color = P.info)
+        }
+        if (!g.mio && !g.graba.isNullOrBlank()) {
+            Text("Lo graba ${g.graba}", fontSize = 13.sp, color = P.warn)
+        }
+        Spacer(Modifier.height(10.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            val total = g.tomas.size.coerceAtLeast(1)
+            LinearProgressIndicator(
+                progress = { if (g.piezaId != null) g.hechas.toFloat() / total else 0f },
+                modifier = Modifier.weight(1f).height(6.dp).clip(RoundedCornerShape(50)),
+                color = if (g.terminada) P.ok else P.accent, trackColor = P.raised,
+            )
+            Spacer(Modifier.width(10.dp))
+            val dur = if (g.duracionTotal > 0) " · ~${g.duracionTotal} s" else ""
+            val done = if (g.piezaId != null) "${g.hechas}/${g.tomas.size} tomas" else "${g.tomas.size} tomas"
+            Text("$done$dur", fontSize = 12.sp, color = P.muted)
+        }
+        if (g.terminada) {
+            g.estado?.let {
+                Spacer(Modifier.height(8.dp))
+                Badge(it, P.ok)
+            }
+        }
+        val files = g.tomas.flatMap { it.archivos }
+        if (files.isNotEmpty()) {
+            Spacer(Modifier.height(10.dp))
+            Row(
+                Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                files.take(5).forEach { archivo -> Thumb(archivo, width = 60.dp) { onView(archivo) } }
+                Text(
+                    if (files.size > 5) "+${files.size - 5}\nver todo" else "ver\ntodo",
+                    fontSize = 12.sp, color = P.info, fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable(onClick = onPiece).padding(8.dp),
+                )
+            }
+        } else {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                g.tomas.first().resumen,
+                fontSize = 14.sp, color = P.soft,
                 maxLines = 2, overflow = TextOverflow.Ellipsis,
             )
         }
@@ -433,7 +460,7 @@ private fun SettingsDialog(prefs: Prefs, onDismiss: () -> Unit) {
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                         modifier = Modifier.fillMaxWidth(),
                     )
-                    authError?.let { Text(it, color = Color(0xFFF87171), fontSize = 12.sp) }
+                    authError?.let { Text(it, color = P.error, fontSize = 12.sp) }
                     Spacer(Modifier.height(8.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Button(enabled = !busy && email.isNotBlank() && password.isNotBlank(), onClick = {
@@ -469,6 +496,12 @@ private fun SettingsDialog(prefs: Prefs, onDismiss: () -> Unit) {
                         }) { Text("Vincular con QR") }
                     }
                 }
+
+                Spacer(Modifier.height(12.dp))
+                HorizontalDivider()
+                Spacer(Modifier.height(12.dp))
+
+                AppearancePicker(context)
 
                 Spacer(Modifier.height(12.dp))
                 HorizontalDivider()
@@ -598,13 +631,13 @@ fun PermissionGate(
     when {
         camera -> content(audio)
         !asked -> Box(Modifier.fillMaxSize())
-        else -> Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+        else -> Surface(Modifier.fillMaxSize(), color = P.background) {
             Column(
                 Modifier.fillMaxSize().padding(32.dp),
                 verticalArrangement = Arrangement.Center,
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                Text("La app necesita la cámara para grabar.", color = Color.White, fontSize = 16.sp)
+                Text("La app necesita la cámara para grabar.", color = P.text, fontSize = 16.sp)
                 Spacer(Modifier.height(16.dp))
                 Button(onClick = { launcher.launch(permissions.toTypedArray()) }) { Text("Dar permiso") }
                 TextButton(onClick = onCancel) { Text("Regresar") }

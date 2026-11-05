@@ -1,10 +1,16 @@
 package com.osmarlg.teleprompter
 
 import android.content.Intent
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import android.media.ExifInterface
+import android.media.MediaPlayer
 import android.net.Uri
 import android.util.LruCache
 import android.widget.MediaController
@@ -30,13 +36,11 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -50,12 +54,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -68,11 +75,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-private val Muted = Color(0xFF9CA3AF)
-private val Blue = Color(0xFF60A5FA)
-private val Green = Color(0xFF34D399)
-private val Amber = Color(0xFFFBBF24)
-private val Red = Color(0xFFF87171)
+private val P get() = AppTheme.palette
 
 fun openLink(context: android.content.Context, url: String) {
     runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
@@ -82,13 +85,14 @@ fun openLink(context: android.content.Context, url: String) {
 @Composable
 private fun TopBar(title: String, subtitle: String? = null, onBack: () -> Unit, actions: @Composable () -> Unit = {}) {
     Row(
-        Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp),
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        TextButton(onClick = onBack) { Text("←", fontSize = 22.sp) }
+        RoundIcon("←", onBack)
+        Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
-            Text(title, fontSize = 20.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            subtitle?.let { Text(it, fontSize = 13.sp, color = Blue, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+            Text(title, fontSize = 20.sp, fontWeight = FontWeight.Bold, color = P.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            subtitle?.let { Text(it, fontSize = 13.sp, color = P.muted, maxLines = 1, overflow = TextOverflow.Ellipsis) }
         }
         actions()
     }
@@ -105,7 +109,7 @@ fun UploadsScreen(onBack: () -> Unit) {
     val errors = Uploader.errorCount
     val done = items.count { it.state == UploadState.SUBIDO }
 
-    Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+    Surface(Modifier.fillMaxSize(), color = P.background) {
         Column(Modifier.fillMaxSize().safeDrawingPadding()) {
             TopBar(
                 "Subidas",
@@ -119,7 +123,7 @@ fun UploadsScreen(onBack: () -> Unit) {
             Text(
                 "Siguen subiendo aunque salgas de la app (verás la notificación «Subiendo…»). Lo que no alcance a subir " +
                     "continúa la próxima vez que abras la app.",
-                fontSize = 12.sp, color = Muted, modifier = Modifier.padding(horizontal = 16.dp),
+                fontSize = 12.sp, color = P.muted, modifier = Modifier.padding(horizontal = 16.dp),
             )
             Row(
                 Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp),
@@ -129,11 +133,11 @@ fun UploadsScreen(onBack: () -> Unit) {
                 if (done > 0) OutlinedButton(onClick = { Uploader.clearDone() }) { Text("Quitar las subidas") }
             }
             if (items.isEmpty()) {
-                Text("No hay subidas todavía.", color = Muted, modifier = Modifier.padding(16.dp))
+                EmptyState("☁", "No hay subidas todavía.", "Lo que grabes aparece aquí mientras se sube al CRM.")
             }
             LazyColumn(
                 contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 24.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(AppTheme.listGap),
             ) {
                 items(items, key = { it.id }) { item -> UploadRow(item) }
             }
@@ -146,40 +150,57 @@ private val timeFormat = SimpleDateFormat("d MMM HH:mm", Locale("es", "MX"))
 @Composable
 private fun UploadRow(item: UploadItem) {
     val context = LocalContext.current
-    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-        Column(Modifier.fillMaxWidth().padding(12.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(if (item.tipo == "foto") "📷" else "🎬", fontSize = 18.sp)
-                Spacer(Modifier.width(8.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(item.label, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    val meta = listOfNotNull(
-                        item.cliente,
-                        timeFormat.format(Date(item.createdAt)),
-                        item.size.takeIf { it > 0 }?.let { "%.1f MB".format(it / 1_048_576.0) },
-                    ).joinToString(" · ")
-                    Text(meta, fontSize = 12.sp, color = Muted)
-                }
-                val (label, color) = when (item.state) {
-                    UploadState.ESPERANDO -> "En fila" to Amber
-                    UploadState.SUBIENDO -> "${item.progress}%" to Amber
-                    UploadState.SUBIDO -> "✓ Subida" to Green
-                    UploadState.ERROR -> "Error" to Red
-                }
-                Text(label, color = color, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+    val (label, color) = when (item.state) {
+        UploadState.ESPERANDO -> "En fila" to P.warn
+        UploadState.SUBIENDO -> "${item.progress}%" to P.warn
+        UploadState.SUBIDO -> "✓ Subida" to P.ok
+        UploadState.ERROR -> "Error" to P.error
+    }
+    StyledCard(stripe = color) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            LocalThumb(item, size = 56.dp)
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(item.label, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = P.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                val meta = listOfNotNull(
+                    item.cliente,
+                    timeFormat.format(Date(item.createdAt)),
+                    item.size.takeIf { it > 0 }?.let { "%.1f MB".format(it / 1_048_576.0) },
+                ).joinToString(" · ")
+                Text(meta, fontSize = 12.sp, color = P.muted)
             }
-            if (item.state == UploadState.SUBIENDO) {
-                Spacer(Modifier.height(6.dp))
-                LinearProgressIndicator(progress = { item.progress / 100f }, modifier = Modifier.fillMaxWidth())
-            }
-            if (item.state == UploadState.ERROR) {
-                item.error?.let { Text(it, color = Red, fontSize = 12.sp) }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TextButton(onClick = { Uploader.retry(context, item.id) }) { Text("Reintentar") }
-                    TextButton(onClick = { Uploader.remove(item.id) }) { Text("Quitar de la lista", color = Muted) }
-                }
+            Badge(label, color)
+        }
+        if (item.state == UploadState.SUBIENDO) {
+            Spacer(Modifier.height(8.dp))
+            LinearProgressIndicator(
+                progress = { item.progress / 100f },
+                modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(50)),
+                color = P.accent, trackColor = P.raised,
+            )
+        }
+        if (item.state == UploadState.ERROR) {
+            item.error?.let { Text(it, color = P.error, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp)) }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = { Uploader.retry(context, item.id) }) { Text("Reintentar") }
+                TextButton(onClick = { Uploader.remove(item.id) }) { Text("Quitar de la lista", color = P.muted) }
             }
         }
+    }
+}
+
+@Composable
+fun EmptyState(symbol: String, title: String, detail: String? = null) {
+    Column(
+        Modifier.fillMaxWidth().padding(horizontal = 32.dp, vertical = 40.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Box(Modifier.size(64.dp).clip(CircleShape).background(P.raised), contentAlignment = Alignment.Center) {
+            Text(symbol, fontSize = 28.sp, color = P.accent)
+        }
+        Spacer(Modifier.height(12.dp))
+        Text(title, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = P.text, textAlign = TextAlign.Center)
+        detail?.let { Text(it, fontSize = 13.sp, color = P.muted, textAlign = TextAlign.Center) }
     }
 }
 
@@ -203,11 +224,21 @@ fun PieceScreen(initial: Guion, prefs: Prefs, onBack: () -> Unit, onRecord: (Gui
             .getOrNull()?.let { guion = it }
         loading = false
     }
-    Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+    Surface(Modifier.fillMaxSize(), color = P.background) {
         Column(Modifier.fillMaxSize().safeDrawingPadding()) {
-            TopBar(guion.titulo, listOfNotNull(guion.cliente, guion.estado, guion.fecha).joinToString(" · "), onBack) {
-                if (loading) CircularProgressIndicator(Modifier.size(20.dp).padding(end = 4.dp), strokeWidth = 2.dp)
+            TopBar(guion.titulo, listOfNotNull(guion.cliente, guion.fecha).joinToString(" · "), onBack) {
+                if (loading) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = P.accent)
             }
+            Row(
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                guion.estado?.let { Badge(it, if (guion.terminada) P.ok else P.warn) }
+                Badge("${guion.hechas}/${guion.tomas.size} tomas", P.info)
+                if (guion.archivos > 0) Badge("${guion.archivos} archivos", P.info)
+            }
+            Spacer(Modifier.height(10.dp))
             Row(
                 Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -218,43 +249,36 @@ fun PieceScreen(initial: Guion, prefs: Prefs, onBack: () -> Unit, onRecord: (Gui
             }
             LazyColumn(
                 contentPadding = PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(AppTheme.listGap),
             ) {
                 items(guion.tomas, key = { it.orden }) { toma ->
                     val index = guion.tomas.indexOf(toma)
                     val local = Uploader.forTake(Uploader.key(guion.id, toma.orden)).filter { it.state != UploadState.SUBIDO }
-                    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-                        Column(Modifier.fillMaxWidth().padding(12.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    "Toma ${toma.orden}${if (toma.esFoto) " · fotos" else ""}",
-                                    fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFFF43F5E),
-                                    modifier = Modifier.weight(1f),
-                                )
-                                TextButton(onClick = { onRecord(guion, index) }) { Text(if (toma.archivos.isEmpty()) "Grabar" else "Grabar otra vez") }
+                    val has = toma.archivos.isNotEmpty() || local.isNotEmpty()
+                    StyledCard(stripe = if (has) P.ok else P.raised) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                "TOMA ${toma.orden}",
+                                fontSize = 12.sp, fontWeight = FontWeight.Bold, color = P.accent,
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            if (toma.esFoto) Badge("📷 fotos", P.info)
+                            Spacer(Modifier.weight(1f))
+                            TextButton(onClick = { onRecord(guion, index) }) {
+                                Text(if (has) "↻ Grabar otra vez" else "● Grabar", fontWeight = FontWeight.SemiBold)
                             }
-                            Text(toma.resumen, fontSize = 14.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
-                            Spacer(Modifier.height(8.dp))
-                            if (toma.archivos.isEmpty() && local.isEmpty()) {
-                                Text("Sin archivos en el CRM.", fontSize = 12.sp, color = Muted)
-                            }
-                            Row(
-                                Modifier.horizontalScroll(rememberScrollState()),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            ) {
-                                toma.archivos.forEach { archivo -> Thumb(archivo) { onView(archivo) } }
-                                local.forEach { item ->
-                                    Box(
-                                        Modifier.size(96.dp).clip(RoundedCornerShape(10.dp)).background(Color(0xFF1F2937)),
-                                        contentAlignment = Alignment.Center,
-                                    ) {
-                                        Text(
-                                            if (item.state == UploadState.ERROR) "⚠ error" else "↑ ${item.progress}%",
-                                            color = if (item.state == UploadState.ERROR) Red else Amber, fontSize = 13.sp,
-                                        )
-                                    }
-                                }
-                            }
+                        }
+                        Text(toma.resumen, fontSize = 14.sp, color = P.soft, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                        Spacer(Modifier.height(10.dp))
+                        if (!has) {
+                            Text("Sin archivos en el CRM.", fontSize = 12.sp, color = P.muted)
+                        }
+                        Row(
+                            Modifier.horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            toma.archivos.forEach { archivo -> Thumb(archivo) { onView(archivo) } }
+                            local.forEach { item -> LocalThumb(item, size = 104.dp, tall = true) }
                         }
                     }
                 }
@@ -263,24 +287,100 @@ fun PieceScreen(initial: Guion, prefs: Prefs, onBack: () -> Unit, onRecord: (Gui
     }
 }
 
+/** Miniatura de un archivo del CRM: la foto, o un cuadro del video con su duración. */
 @Composable
-private fun Thumb(archivo: Archivo, onClick: () -> Unit) {
+fun Thumb(archivo: Archivo, width: Dp = 104.dp, onClick: () -> Unit) {
+    val context = LocalContext.current
+    val height = width * 4 / 3
     Box(
-        Modifier.size(96.dp).clip(RoundedCornerShape(10.dp)).background(Color(0xFF1F2937)).clickable(onClick = onClick),
+        Modifier.size(width, height).clip(RoundedCornerShape(12.dp)).background(P.raised).clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        if (archivo.tipo == "foto" && archivo.url != null) {
-            RemoteImage(archivo.url, maxSide = 300, modifier = Modifier.fillMaxSize(), crop = true)
-        } else {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(if (archivo.tipo == "video") "▶" else "📄", fontSize = 28.sp, color = Color.White)
-                archivo.subido?.let { Text(it.substringAfter(' '), fontSize = 11.sp, color = Muted) }
+        val url = archivo.url
+        when {
+            url == null -> Text("borrado", fontSize = 11.sp, color = P.error)
+            archivo.tipo == "foto" -> RemoteImage(url, maxSide = 360, modifier = Modifier.fillMaxSize(), crop = true)
+            archivo.tipo == "video" -> {
+                var frame by remember(archivo.uuid) { mutableStateOf(VideoFrames.cached(archivo.uuid)) }
+                var failed by remember(archivo.uuid) { mutableStateOf(false) }
+                LaunchedEffect(archivo.uuid) {
+                    if (frame == null) {
+                        frame = VideoFrames.load(context, archivo.uuid, url)
+                        failed = frame == null
+                    }
+                }
+                frame?.let {
+                    Image(it.bitmap.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                }
+                if (frame == null && !failed) Shimmer()
+                // Degradado abajo para que la duración se lea sobre cualquier cuadro.
+                Box(
+                    Modifier.fillMaxSize().background(
+                        Brush.verticalGradient(0.55f to Color.Transparent, 1f to Color.Black.copy(alpha = 0.65f)),
+                    ),
+                )
+                PlayBadge(Modifier.align(Alignment.Center))
+                frame?.durationMs?.takeIf { it > 0 }?.let {
+                    Text(
+                        formatDuration(it), color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.align(Alignment.BottomEnd).padding(6.dp),
+                    )
+                }
             }
-        }
-        if (archivo.url == null) {
-            Text("borrado", fontSize = 11.sp, color = Red, modifier = Modifier.align(Alignment.BottomCenter))
+            else -> Text("📄", fontSize = 28.sp)
         }
     }
+}
+
+/** Lo que está en el celular y todavía no llega al CRM: miniatura con el avance encima. */
+@Composable
+private fun LocalThumb(item: UploadItem, size: Dp, tall: Boolean = false) {
+    val context = LocalContext.current
+    var frame by remember(item.id) { mutableStateOf<VideoFrames.Frame?>(null) }
+    LaunchedEffect(item.id) { frame = VideoFrames.loadLocal(context, item.id, item.tipo == "foto") }
+    Box(
+        Modifier.size(size, if (tall) size * 4 / 3 else size).clip(RoundedCornerShape(10.dp)).background(P.raised),
+        contentAlignment = Alignment.Center,
+    ) {
+        frame?.let { Image(it.bitmap.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop) }
+            ?: Text(if (item.tipo == "foto") "📷" else "🎬", fontSize = 20.sp)
+        if (tall) {
+            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.45f)))
+            Text(
+                when (item.state) {
+                    UploadState.ERROR -> "⚠ error"
+                    UploadState.ESPERANDO -> "en fila"
+                    else -> "↑ ${item.progress}%"
+                },
+                color = if (item.state == UploadState.ERROR) P.error else Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold,
+            )
+        }
+    }
+}
+
+@Composable
+private fun PlayBadge(modifier: Modifier) {
+    Box(
+        modifier.size(38.dp).clip(CircleShape).background(Color.Black.copy(alpha = 0.45f)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text("▶", color = Color.White, fontSize = 16.sp)
+    }
+}
+
+/** Relleno animado mientras carga una miniatura. */
+@Composable
+private fun Shimmer() {
+    val transition = rememberInfiniteTransition(label = "shimmer")
+    val alpha by transition.animateFloat(
+        initialValue = 0.25f, targetValue = 0.6f,
+        animationSpec = infiniteRepeatable(
+            tween(800),
+            RepeatMode.Reverse,
+        ),
+        label = "alpha",
+    )
+    Box(Modifier.fillMaxSize().background(P.muted.copy(alpha = alpha * 0.4f)))
 }
 
 // ============================================================== Ver un archivo
@@ -288,6 +388,9 @@ private fun Thumb(archivo: Archivo, onClick: () -> Unit) {
 @Composable
 fun MediaViewer(archivo: Archivo, onBack: () -> Unit) {
     val context = LocalContext.current
+    var loadingVideo by remember(archivo.uuid) { mutableStateOf(true) }
+    var buffering by remember(archivo.uuid) { mutableStateOf(false) }
+    var showPoster by remember(archivo.uuid) { mutableStateOf(true) }
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         val url = archivo.url
         when {
@@ -296,32 +399,71 @@ fun MediaViewer(archivo: Archivo, onBack: () -> Unit) {
                 color = Color.White, modifier = Modifier.align(Alignment.Center).padding(24.dp),
             )
             archivo.tipo == "foto" -> RemoteImage(url, maxSide = 2048, modifier = Modifier.fillMaxSize(), crop = false)
-            archivo.tipo == "video" -> AndroidView(
-                modifier = Modifier.fillMaxSize(),
-                factory = { ctx ->
-                    VideoView(ctx).apply {
-                        val controller = MediaController(ctx)
-                        controller.setAnchorView(this)
-                        setMediaController(controller)
-                        setVideoURI(Uri.parse(url))
-                        setOnPreparedListener { start() }
-                        setOnErrorListener { _, _, _ ->
-                            Toast.makeText(ctx, "No se pudo reproducir; ábrelo en el navegador.", Toast.LENGTH_LONG).show()
-                            true
+            archivo.tipo == "video" -> {
+                AndroidView(
+                    modifier = Modifier.fillMaxSize(),
+                    factory = { ctx ->
+                        VideoView(ctx).apply {
+                            val controller = MediaController(ctx)
+                            controller.setAnchorView(this)
+                            setMediaController(controller)
+                            setVideoURI(Uri.parse(url))
+                            setOnPreparedListener { player ->
+                                loadingVideo = false
+                                player.setOnInfoListener { _, what, _ ->
+                                    when (what) {
+                                        MediaPlayer.MEDIA_INFO_VIDEO_RENDERING_START -> showPoster = false
+                                        MediaPlayer.MEDIA_INFO_BUFFERING_START -> buffering = true
+                                        MediaPlayer.MEDIA_INFO_BUFFERING_END -> buffering = false
+                                    }
+                                    false
+                                }
+                                start()
+                            }
+                            setOnErrorListener { _, _, _ ->
+                                loadingVideo = false
+                                Toast.makeText(ctx, "No se pudo reproducir; ábrelo en el navegador.", Toast.LENGTH_LONG).show()
+                                true
+                            }
+                        }
+                    },
+                    onRelease = { it.stopPlayback() },
+                )
+                // Mientras carga: el cuadro de la miniatura encima, oscurecido, con el indicador.
+                if (showPoster) {
+                    VideoFrames.cached(archivo.uuid)?.let {
+                        Image(
+                            it.bitmap.asImageBitmap(), null,
+                            Modifier.fillMaxSize().background(Color.Black), contentScale = ContentScale.Fit,
+                        )
+                    }
+                }
+                if (loadingVideo || buffering) {
+                    Column(
+                        Modifier.align(Alignment.Center).clip(RoundedCornerShape(16.dp))
+                            .background(Color.Black.copy(alpha = 0.6f)).padding(horizontal = 24.dp, vertical = 18.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        CircularProgressIndicator(color = P.accent, strokeWidth = 3.dp)
+                        Spacer(Modifier.height(10.dp))
+                        Text(if (loadingVideo) "Cargando video…" else "Cargando…", color = Color.White, fontSize = 14.sp)
+                        if (loadingVideo && archivo.tamano > 0) {
+                            Text("%.1f MB".format(archivo.tamano / 1_048_576.0), color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp)
                         }
                     }
-                },
-                onRelease = { it.stopPlayback() },
-            )
+                }
+            }
             else -> Button(onClick = { openLink(context, url) }, modifier = Modifier.align(Alignment.Center)) { Text("Abrir archivo") }
         }
         Row(
-            Modifier.fillMaxWidth().safeDrawingPadding().padding(8.dp),
+            Modifier.fillMaxWidth()
+                .background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.7f), Color.Transparent)))
+                .safeDrawingPadding().padding(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             TextButton(onClick = onBack) { Text("← Volver", color = Color.White) }
             Text(archivo.nombre, color = Color.White, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-            url?.let { TextButton(onClick = { openLink(context, it) }) { Text("Abrir", color = Blue) } }
+            url?.let { TextButton(onClick = { openLink(context, it) }) { Text("Abrir", color = Color.White) } }
         }
     }
 }
@@ -353,8 +495,13 @@ fun RemoteImage(url: String, maxSide: Int, modifier: Modifier, crop: Boolean) {
                 current.asImageBitmap(), contentDescription = null, modifier = Modifier.fillMaxSize(),
                 contentScale = if (crop) ContentScale.Crop else ContentScale.Fit,
             )
-            failed -> Text("⚠", color = Red, fontSize = 22.sp)
-            else -> CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
+            failed -> Text("⚠", color = P.error, fontSize = 22.sp)
+            crop -> Shimmer()
+            else -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                CircularProgressIndicator(color = P.accent, strokeWidth = 3.dp)
+                Spacer(Modifier.height(10.dp))
+                Text("Cargando foto…", color = Color.White, fontSize = 14.sp)
+            }
         }
     }
 }

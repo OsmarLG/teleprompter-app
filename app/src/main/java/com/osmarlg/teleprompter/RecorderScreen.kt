@@ -82,7 +82,7 @@ import java.util.Locale
 import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
 
-private val Accent = Color(0xFFF43F5E)
+private val Accent get() = AppTheme.palette.accent
 private val Soft = Color(0xFFD1D5DB)
 private val Dim = Color(0xFF9CA3AF)
 private val Ok = Color(0xFF34D399)

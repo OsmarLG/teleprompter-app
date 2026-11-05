@@ -12,8 +12,6 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -22,7 +20,6 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.graphics.Color
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -74,6 +71,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
 
         prefs = Prefs(this)
+        AppTheme.load(this)
         Crm.appVersion = runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull().orEmpty()
         Uploader.init(this)
         Uploader.resumePending(this)
@@ -87,13 +85,7 @@ class MainActivity : ComponentActivity() {
         }
 
         setContent {
-            MaterialTheme(
-                colorScheme = darkColorScheme(
-                    primary = Color(0xFFF43F5E),
-                    background = Color(0xFF0B0F17),
-                    surface = Color(0xFF141A24),
-                )
-            ) {
+            TeleprompterTheme {
                 val stack = remember { mutableStateListOf<Screen>(Screen.Scripts) }
                 fun push(screen: Screen) { stack.add(screen) }
                 fun back() { if (stack.size > 1) stack.removeAt(stack.lastIndex) }
@@ -110,6 +102,7 @@ class MainActivity : ComponentActivity() {
                         onRecord = { push(Screen.Record(it)) },
                         onPiece = { push(Screen.Piece(it)) },
                         onUploads = { push(Screen.Uploads) },
+                        onView = { push(Screen.Viewer(it)) },
                     )
                     Screen.Uploads -> UploadsScreen(onBack = { back() })
                     is Screen.Piece -> PieceScreen(
