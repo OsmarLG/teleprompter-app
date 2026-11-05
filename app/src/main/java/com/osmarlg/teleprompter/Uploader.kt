@@ -47,8 +47,8 @@ object Uploader {
     fun upload(context: Context, prefs: Prefs, guion: Guion, toma: Toma, uri: Uri) {
         val ctx = context.applicationContext
         if (prefs.signedIn && guion.piezaId != null && toma.id != null) {
-            val item = Pending(key(guion.id, toma.orden), uri.toString(), guion.piezaId, toma.id)
-            savePending(prefs, pending(prefs).filterNot { it.key == item.key } + item)
+            val item = Pending(key(guion.id, toma.orden), uri.toString(), guion.piezaId, toma.id, Crm.base(prefs.crmUrl), prefs.crmToken)
+            savePending(prefs, pending(prefs).filterNot { it.uri == item.uri } + item)
             startCrm(ctx, prefs, item)
             return
         }
@@ -61,33 +61,42 @@ object Uploader {
     fun retry(context: Context, prefs: Prefs, guion: Guion, toma: Toma) {
         val k = key(guion.id, toma.orden)
         val ctx = context.applicationContext
-        pending(prefs).firstOrNull { it.key == k }?.let { startCrm(ctx, prefs, it); return }
+        val waiting = pending(prefs).filter { it.key == k }
+        if (waiting.isNotEmpty()) { waiting.forEach { startCrm(ctx, prefs, it) }; return }
         val (uri, url) = lastLegacy[k] ?: return
         startLegacy(ctx, k, uri, url, prefs.apiToken, guion, toma)
     }
 
-    /** Al abrir la app: continúa las subidas al CRM que quedaron a medias. */
+    /** Al abrir la app: continúa las subidas al CRM que quedaron a medias (cada una con su cuenta). */
     fun resumePending(context: Context, prefs: Prefs) {
-        if (!prefs.signedIn) return
         pending(prefs).forEach { if (states[it.key] == null) startCrm(context.applicationContext, prefs, it) }
     }
 
     // ---------------------------------------------------------------- CRM (por partes, reanudable)
 
-    private data class Pending(val key: String, val uri: String, val piezaId: Long, val tomaId: Long)
+    /** Cada subida guarda la cuenta con la que se grabó, aunque luego se cambie de cuenta. */
+    private data class Pending(val key: String, val uri: String, val piezaId: Long, val tomaId: Long, val url: String, val token: String)
 
     private fun pending(prefs: Prefs): List<Pending> = runCatching {
         val arr = JSONArray(prefs.pendingUploads)
         (0 until arr.length()).map { i ->
             val o = arr.getJSONObject(i)
-            Pending(o.getString("key"), o.getString("uri"), o.getLong("pieza"), o.getLong("toma"))
+            Pending(
+                o.getString("key"), o.getString("uri"), o.getLong("pieza"), o.getLong("toma"),
+                o.optString("url", Crm.base(prefs.crmUrl)), o.optString("token", prefs.crmToken),
+            )
         }
     }.getOrDefault(emptyList())
 
     @Synchronized
     private fun savePending(prefs: Prefs, items: List<Pending>) {
         val arr = JSONArray()
-        items.forEach { arr.put(JSONObject().put("key", it.key).put("uri", it.uri).put("pieza", it.piezaId).put("toma", it.tomaId)) }
+        items.forEach {
+            arr.put(
+                JSONObject().put("key", it.key).put("uri", it.uri).put("pieza", it.piezaId).put("toma", it.tomaId)
+                    .put("url", it.url).put("token", it.token),
+            )
+        }
         prefs.pendingUploads = arr.toString()
     }
 
@@ -100,7 +109,7 @@ object Uploader {
                 try {
                     sendCrm(ctx, prefs, item)
                     states[item.key] = UploadState.SUBIDO
-                    savePending(prefs, pending(prefs).filterNot { it.key == item.key })
+                    savePending(prefs, pending(prefs).filterNot { it.uri == item.uri })
                 } catch (e: Exception) {
                     states[item.key] = UploadState.ERROR
                     errors[item.key] = e.message ?: e.javaClass.simpleName
@@ -111,8 +120,8 @@ object Uploader {
 
     private suspend fun sendCrm(ctx: Context, prefs: Prefs, item: Pending) {
         val uri = Uri.parse(item.uri)
-        val base = Crm.base(prefs.crmUrl)
-        val token = prefs.crmToken
+        val base = item.url
+        val token = item.token
         val size = fileSize(ctx, uri)
         if (size <= 0L) throw IllegalStateException("No se encontró el video en el celular.")
 
@@ -187,11 +196,14 @@ object Uploader {
             ?: ctx.contentResolver.openFileDescriptor(uri, "r")?.use { it.statSize }
             ?: -1L
 
-    private fun fileName(ctx: Context, uri: Uri): String =
-        ctx.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+    /** El nombre del archivo con su extensión (.mp4 para video, .jpg para foto). */
+    private fun fileName(ctx: Context, uri: Uri): String {
+        val extension = if (ctx.contentResolver.getType(uri)?.startsWith("image/") == true) "jpg" else "mp4"
+        val name = ctx.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
             ?.use { c -> if (c.moveToFirst()) c.getString(0) else null }
-            ?.let { if (it.endsWith(".mp4")) it else "$it.mp4" }
-            ?: "toma.mp4"
+            ?: "toma"
+        return if (name.substringAfterLast('.', "").lowercase() in setOf("mp4", "jpg", "jpeg")) name else "$name.$extension"
+    }
 
     // ---------------------------------------------------------------- API propia (multipart)
 

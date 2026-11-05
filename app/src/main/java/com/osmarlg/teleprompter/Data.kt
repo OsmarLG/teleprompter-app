@@ -14,13 +14,33 @@ data class Toma(
     val duracion: Int, // segundos; 0 = sin límite
     /** Id de la toma en el CRM (para subirla ahí); null con una API propia. */
     val id: Long? = null,
-    /** Qué se ve, dónde va el celular, encuadre (el CRM lo manda aparte del texto a decir). */
+    /** Qué se ve (el CRM lo manda aparte del texto a decir). */
     val escena: String? = null,
     /** Cómo se dice: «Tal cual», «Con tus palabras» o «Sin hablar». */
     val decir: String? = null,
     val hecha: Boolean = false,
     val subidas: Int = 0,
-)
+    /** "foto" o "video". */
+    val tipo: String = "video",
+    /** Fotos que pide la toma (solo fotos). */
+    val fotos: Int = 0,
+    /** Nombre de la toma (vacío si repetía la escena). */
+    val nombre: String? = null,
+    /** Qué hacer. */
+    val accion: String? = null,
+    /** Dónde va el celular. */
+    val celular: String? = null,
+    val encuadre: String? = null,
+    /** Texto que va en pantalla en la edición. */
+    val enPantalla: String? = null,
+    /** Cuántas veces grabarla, etc. */
+    val cobertura: String? = null,
+) {
+    val esFoto: Boolean get() = tipo == "foto"
+
+    /** Lo que se muestra cuando no hay texto a decir. */
+    val resumen: String get() = texto.ifBlank { nombre ?: escena ?: accion ?: "" }
+}
 
 data class Guion(
     val id: String,
@@ -83,10 +103,18 @@ object GuionParser {
                     decir = item.text("decir"),
                     hecha = item.optBoolean("hecha", false),
                     subidas = item.optInt("subidas", 0),
+                    tipo = item.text("tipo") ?: "video",
+                    fotos = item.optInt("fotos", 0),
+                    nombre = item.text("nombre"),
+                    accion = item.text("accion"),
+                    celular = item.text("celular"),
+                    encuadre = item.text("encuadre"),
+                    enPantalla = item.text("en_pantalla"),
+                    cobertura = item.text("cobertura"),
                 )
                 else -> null
             }
-        }.filter { it.texto.isNotBlank() || !it.escena.isNullOrBlank() }.sortedBy { it.orden }
+        }.filter { it.resumen.isNotBlank() }.sortedBy { it.orden }
 
         val fromCrm = obj.has("modo")
         return Guion(
@@ -145,6 +173,9 @@ object Api {
 
 enum class VolumeMode { NAVEGAR, GRABAR }
 
+/** Una cuenta del CRM guardada en el teléfono (para cambiar de cuenta sin volver a escribir la contraseña). */
+data class SavedAccount(val url: String, val token: String, val name: String, val email: String)
+
 class Prefs(context: Context) {
     private val sp = context.getSharedPreferences("teleprompter", Context.MODE_PRIVATE)
 
@@ -168,19 +199,55 @@ class Prefs(context: Context) {
 
     val signedIn: Boolean get() = crmToken.isNotBlank()
 
+    /** Las cuentas con las que se ha entrado en este teléfono; la activa es la de crmToken. */
+    val accounts: List<SavedAccount>
+        get() = runCatching {
+            val arr = JSONArray(sp.getString("accounts", "[]") ?: "[]")
+            (0 until arr.length()).map { i ->
+                val o = arr.getJSONObject(i)
+                SavedAccount(o.getString("url"), o.getString("token"), o.optString("name"), o.optString("email"))
+            }
+        }.getOrDefault(emptyList())
+
+    private fun saveAccounts(items: List<SavedAccount>) {
+        val arr = JSONArray()
+        items.forEach { arr.put(JSONObject().put("url", it.url).put("token", it.token).put("name", it.name).put("email", it.email)) }
+        sp.edit().putString("accounts", arr.toString()).apply()
+    }
+
+    /** Entra (o vuelve a entrar) con una cuenta: queda guardada y activa. */
     fun signIn(url: String, session: Crm.Session) {
-        crmUrl = url
-        crmToken = session.token
-        crmUser = session.userName
-        crmEmail = session.email
+        val account = SavedAccount(url, session.token, session.userName, session.email)
+        saveAccounts(listOf(account) + accounts.filterNot { it.url == url && it.email.equals(session.email, ignoreCase = true) })
+        use(account)
+    }
+
+    fun use(account: SavedAccount) {
+        crmUrl = account.url
+        crmToken = account.token
+        crmUser = account.name
+        crmEmail = account.email
         cache = ""
     }
 
+    /** Cierra la cuenta activa y la quita del teléfono; si hay otra guardada, queda esa. */
     fun signOut() {
-        crmToken = ""
-        crmUser = ""
-        cache = ""
+        val remaining = accounts.filterNot { it.token == crmToken }
+        saveAccounts(remaining)
+        val next = remaining.firstOrNull()
+        if (next != null) {
+            use(next)
+        } else {
+            crmToken = ""
+            crmUser = ""
+            cache = ""
+        }
     }
+
+    /** «Ver de todos» (solo equipo de ELROI): todas las piezas pendientes, no solo las tuyas. */
+    var showAll: Boolean
+        get() = sp.getBoolean("showAll", false)
+        set(v) = sp.edit().putBoolean("showAll", v).apply()
 
     /** API propia (opcional, sin CRM). */
     var apiUrl: String

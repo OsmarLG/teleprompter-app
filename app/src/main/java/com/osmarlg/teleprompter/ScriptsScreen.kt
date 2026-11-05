@@ -77,17 +77,23 @@ fun ScriptsScreen(prefs: Prefs, onOpen: (Guion) -> Unit) {
     var showSettings by remember { mutableStateOf(false) }
     var reloadTick by remember { mutableIntStateOf(0) }
     var modeFilter by remember { mutableStateOf<String?>(null) }
+    var showAll by remember { mutableStateOf(prefs.showAll) }
+    var canSeeAll by remember { mutableStateOf(false) }
+    var showAccounts by remember { mutableStateOf(false) }
     val sessionVersion = AppEvents.sessionVersion
 
     fun fromCacheOrDemo(): List<Guion> =
         runCatching { GuionParser.parse(prefs.cache) }.getOrNull()?.takeIf { it.isNotEmpty() }
             ?: GuionParser.parse(DEMO_JSON)
 
-    LaunchedEffect(reloadTick, sessionVersion) {
+    LaunchedEffect(reloadTick, sessionVersion, showAll) {
         val url: String
         val token: String
         when {
-            prefs.signedIn -> { url = Crm.guionesUrl(prefs.crmUrl); token = prefs.crmToken }
+            prefs.signedIn -> {
+                url = Crm.guionesUrl(prefs.crmUrl) + if (showAll) "?todos=1" else ""
+                token = prefs.crmToken
+            }
             prefs.apiUrl.isNotBlank() -> { url = Api.guionesUrl(prefs.apiUrl); token = prefs.apiToken }
             else -> {
                 guiones = GuionParser.parse(DEMO_JSON)
@@ -100,10 +106,15 @@ fun ScriptsScreen(prefs: Prefs, onOpen: (Guion) -> Unit) {
         try {
             val raw = Api.fetch(url, token)
             val parsed = GuionParser.parse(raw)
+            canSeeAll = prefs.signedIn && runCatching { org.json.JSONObject(raw).optBoolean("puede_ver_todos", false) }.getOrDefault(false)
             prefs.cache = raw
             guiones = parsed
             if (parsed.isEmpty()) {
-                message = if (prefs.signedIn) "No tienes guiones pendientes por grabar." else "La API no regresó guiones con tomas."
+                message = when {
+                    !prefs.signedIn -> "La API no regresó guiones con tomas."
+                    showAll -> "No hay guiones pendientes por grabar."
+                    else -> "No tienes guiones pendientes por grabar."
+                }
             }
         } catch (e: Crm.CrmException) {
             if (e.status == 401 && prefs.signedIn) {
@@ -134,7 +145,11 @@ fun ScriptsScreen(prefs: Prefs, onOpen: (Guion) -> Unit) {
                 Column(Modifier.weight(1f)) {
                     Text("Guiones", fontSize = 26.sp, fontWeight = FontWeight.Bold)
                     if (prefs.signedIn && prefs.crmUser.isNotBlank()) {
-                        Text(prefs.crmUser, fontSize = 13.sp, color = Muted)
+                        Text(
+                            "${prefs.crmUser} ▾",
+                            fontSize = 13.sp, color = Color(0xFF60A5FA),
+                            modifier = Modifier.clickable { showAccounts = true },
+                        )
                     }
                 }
                 TextButton(onClick = { reloadTick++ }) { Text("⟳ Recargar") }
@@ -145,12 +160,19 @@ fun ScriptsScreen(prefs: Prefs, onOpen: (Guion) -> Unit) {
                 Text(it, color = Warn, fontSize = 13.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
             }
 
-            if (modes.size > 1) {
+            if (modes.size > 1 || canSeeAll) {
                 Row(
                     Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    FilterChip(selected = modeFilter == null, onClick = { modeFilter = null }, label = { Text("Todos") })
+                    if (canSeeAll) {
+                        FilterChip(
+                            selected = showAll,
+                            onClick = { showAll = !showAll; prefs.showAll = showAll },
+                            label = { Text("Ver de todos") },
+                        )
+                    }
+                    FilterChip(selected = modeFilter == null, onClick = { modeFilter = null }, label = { Text("Todos los modos") })
                     modes.forEach { (mode, label) ->
                         FilterChip(selected = modeFilter == mode, onClick = { modeFilter = mode }, label = { Text(label) })
                     }
@@ -178,6 +200,51 @@ fun ScriptsScreen(prefs: Prefs, onOpen: (Guion) -> Unit) {
             scope.launch { reloadTick++ }
         })
     }
+
+    if (showAccounts) {
+        AccountsDialog(
+            prefs = prefs,
+            onAdd = { showAccounts = false; showSettings = true },
+            onDismiss = { showAccounts = false },
+        )
+    }
+}
+
+/** Cambiar de cuenta con un toque entre las que ya entraron en este teléfono. */
+@Composable
+private fun AccountsDialog(prefs: Prefs, onAdd: () -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Cuentas") },
+        text = {
+            Column {
+                prefs.accounts.forEach { account ->
+                    val active = account.token == prefs.crmToken
+                    Row(
+                        Modifier.fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .clickable {
+                                if (!active) {
+                                    prefs.use(account)
+                                    AppEvents.sessionVersion++
+                                }
+                                onDismiss()
+                            }
+                            .padding(vertical = 10.dp, horizontal = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(account.name.ifBlank { account.email }, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                            Text(account.email, fontSize = 12.sp, color = Muted)
+                        }
+                        if (active) Text("✓", color = Color(0xFF34D399), fontSize = 18.sp)
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onAdd) { Text("Agregar otra cuenta") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cerrar") } },
+    )
 }
 
 @Composable
@@ -214,7 +281,7 @@ private fun ScriptCard(g: Guion, onClick: () -> Unit) {
             Spacer(Modifier.height(6.dp))
             val first = g.tomas.first()
             Text(
-                first.texto.ifBlank { first.escena.orEmpty() },
+                first.resumen,
                 fontSize = 14.sp, color = Color(0xFFD1D5DB),
                 maxLines = 2, overflow = TextOverflow.Ellipsis,
             )
@@ -272,16 +339,19 @@ private fun SettingsDialog(prefs: Prefs, onDismiss: () -> Unit) {
                     Text("${prefs.crmUser} · ${prefs.crmEmail}", fontSize = 14.sp)
                     Text("Tus guiones salen de Grabaciones y cada toma se sube sola.", fontSize = 12.sp, color = Muted)
                     Spacer(Modifier.height(8.dp))
-                    OutlinedButton(enabled = !busy, onClick = {
-                        busy = true
-                        scope.launch {
-                            Crm.logout(prefs.crmUrl, prefs.crmToken)
-                            prefs.signOut()
-                            signedIn = false
-                            busy = false
-                            AppEvents.sessionVersion++
-                        }
-                    }) { Text("Cerrar sesión") }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(enabled = !busy, onClick = {
+                            busy = true
+                            scope.launch {
+                                Crm.logout(prefs.crmUrl, prefs.crmToken)
+                                prefs.signOut()
+                                signedIn = prefs.signedIn
+                                busy = false
+                                AppEvents.sessionVersion++
+                            }
+                        }) { Text("Cerrar sesión") }
+                        TextButton(enabled = !busy, onClick = { signedIn = false; email = "" }) { Text("Agregar otra cuenta") }
+                    }
                 } else {
                     OutlinedTextField(
                         value = email, onValueChange = { email = it },
