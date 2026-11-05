@@ -26,6 +26,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -102,14 +103,16 @@ fun RecorderScreen(
     guion: Guion,
     prefs: Prefs,
     audioGranted: Boolean,
+    startIndex: Int = 0,
     onClose: () -> Unit,
+    onReview: (Int) -> Unit = {},
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
     val screenHeight = LocalConfiguration.current.screenHeightDp
 
-    var index by remember { mutableIntStateOf(0) }
+    var index by remember { mutableIntStateOf(startIndex.coerceIn(0, guion.tomas.lastIndex)) }
     var front by remember { mutableStateOf(prefs.frontCamera) }
     var fontSize by remember { mutableFloatStateOf(prefs.fontSize) }
     var autoStop by remember { mutableStateOf(prefs.autoStop) }
@@ -345,22 +348,30 @@ fun RecorderScreen(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                Text("TOMA ${index + 1}/${guion.tomas.size}", color = Accent, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                if (isPhoto) {
-                    val goal = if (toma.fotos > 0) "/${toma.fotos}" else ""
-                    Chip("📷 ${photosTaken[index] ?: 0}$goal fotos", Color(0xFF60A5FA))
-                } else if (toma.duracion > 0) {
-                    Chip("${toma.duracion} s", Soft)
-                }
-                toma.decir?.let { Chip(it, if (toma.texto.isBlank()) Amber else Soft) }
-                UploadChip(guion, toma, done = recorded[index] == true || toma.hecha)
-                Spacer(Modifier.weight(1f))
                 Text(
-                    if (infoOpen) "Ocultar ▴" else "Indicaciones ▾",
-                    color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.clip(RoundedCornerShape(50)).background(Color.White.copy(alpha = 0.15f))
+                    "TOMA ${index + 1}/${guion.tomas.size}",
+                    color = Accent, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false,
+                )
+                Row(
+                    Modifier.weight(1f).horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (isPhoto) {
+                        val goal = if (toma.fotos > 0) "/${toma.fotos}" else ""
+                        Chip("📷 ${photosTaken[index] ?: 0}$goal", Color(0xFF60A5FA))
+                    } else if (toma.duracion > 0) {
+                        Chip("${toma.duracion} s", Soft)
+                    }
+                    toma.decir?.let { Chip(it, if (toma.texto.isBlank()) Amber else Soft) }
+                    UploadChip(guion, toma, done = recorded[index] == true || toma.hecha)
+                }
+                Text(
+                    if (infoOpen) "▴" else "ⓘ ▾",
+                    color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false,
+                    modifier = Modifier.clip(RoundedCornerShape(50)).background(Color.White.copy(alpha = 0.18f))
                         .clickable { showInfo[index] = !infoOpen }
-                        .padding(horizontal = 10.dp, vertical = 4.dp),
+                        .padding(horizontal = 12.dp, vertical = 4.dp),
                 )
             }
 
@@ -454,7 +465,7 @@ fun RecorderScreen(
             }
 
             // Fila secundaria
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Pill("✕") { if (!isBusy) onClose() }
                 Pill("A−") { fontSize = (fontSize - 2f).coerceAtLeast(14f); prefs.fontSize = fontSize }
                 Pill("A+") { fontSize = (fontSize + 2f).coerceAtMost(56f); prefs.fontSize = fontSize }
@@ -465,6 +476,9 @@ fun RecorderScreen(
                 }
                 Pill("⟲ cámara") {
                     if (!isBusy) { front = !front; prefs.frontCamera = front }
+                }
+                if (guion.piezaId != null) {
+                    Pill("☁ ver") { if (!isBusy) onReview(index) }
                 }
             }
             Spacer(Modifier.height(16.dp))
@@ -496,22 +510,28 @@ private fun Chip(label: String, color: Color) {
     )
 }
 
+/** Estado de lo grabado en esta toma: subiendo (%), en fila, con error (toca para reintentar) o cuántos ya subieron. */
 @Composable
 private fun UploadChip(guion: Guion, toma: Toma, done: Boolean) {
     val context = LocalContext.current
     val key = Uploader.key(guion.id, toma.orden)
-    when (Uploader.states[key]) {
-        UploadState.ESPERANDO -> Chip("↑ en fila", Amber)
-        UploadState.SUBIENDO -> Chip("↑ ${Uploader.progress[key] ?: 0}%", Amber)
-        UploadState.SUBIDO -> Chip("☁ subida", Color(0xFF60A5FA))
-        UploadState.ERROR -> Text(
+    val items = Uploader.items.filter { it.takeKey == key }
+    val uploading = items.firstOrNull { it.state == UploadState.SUBIENDO }
+    val waiting = items.count { it.state == UploadState.ESPERANDO }
+    val failed = items.count { it.state == UploadState.ERROR }
+    val uploaded = items.count { it.state == UploadState.SUBIDO } + toma.archivos.size
+    when {
+        failed > 0 -> Text(
             "⚠ reintentar",
-            color = Color(0xFFF87171), fontSize = 12.sp,
+            color = Color(0xFFF87171), fontSize = 12.sp, maxLines = 1,
             modifier = Modifier.clip(RoundedCornerShape(50)).background(Color.White.copy(alpha = 0.10f))
-                .clickable { Uploader.retry(context, Prefs(context), guion, toma) }
+                .clickable { Uploader.retryTake(context, key) }
                 .padding(horizontal = 8.dp, vertical = 2.dp),
         )
-        null -> if (done) Chip("✓", Ok)
+        uploading != null -> Chip("↑ ${uploading.progress}%${if (waiting > 0) " +$waiting" else ""}", Amber)
+        waiting > 0 -> Chip("↑ en fila ($waiting)", Amber)
+        uploaded > 0 -> Chip("☁ $uploaded", Color(0xFF60A5FA))
+        done -> Chip("✓", Ok)
     }
 }
 

@@ -8,6 +8,17 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 
+/** Un archivo ya subido al CRM (con liga firmada de 24 h para verlo). */
+data class Archivo(
+    val uuid: String,
+    /** "foto", "video" u "otro". */
+    val tipo: String,
+    val nombre: String,
+    val tamano: Long,
+    val subido: String?,
+    val url: String?,
+)
+
 data class Toma(
     val orden: Int,
     val texto: String,
@@ -35,6 +46,8 @@ data class Toma(
     val enPantalla: String? = null,
     /** Cuántas veces grabarla, etc. */
     val cobertura: String? = null,
+    /** Lo que ya se subió de esta toma al CRM. */
+    val archivos: List<Archivo> = emptyList(),
 ) {
     val esFoto: Boolean get() = tipo == "foto"
 
@@ -56,9 +69,17 @@ data class Guion(
     val mio: Boolean = false,
     /** Quién lo graba (asignados o «Quién graba sus reels» del cliente). */
     val graba: String? = null,
+    /** Ya grabada (material subido, en edición, publicada…). */
+    val terminada: Boolean = false,
+    /** La visita en Grabaciones del CRM. */
+    val crmUrl: String? = null,
+    /** Liga del avance editado y de la publicación (si el usuario ve el calendario de contenido). */
+    val avance: String? = null,
+    val publicacion: String? = null,
 ) {
     val duracionTotal: Int get() = tomas.sumOf { it.duracion }
     val hechas: Int get() = tomas.count { it.hecha }
+    val archivos: Int get() = tomas.sumOf { it.archivos.size }
 }
 
 /**
@@ -113,6 +134,7 @@ object GuionParser {
                     encuadre = item.text("encuadre"),
                     enPantalla = item.text("en_pantalla"),
                     cobertura = item.text("cobertura"),
+                    archivos = parseFiles(item.optJSONArray("archivos")),
                 )
                 else -> null
             }
@@ -131,7 +153,26 @@ object GuionParser {
             estado = obj.text("estado"),
             mio = obj.optBoolean("mio", false),
             graba = obj.text("graba"),
+            terminada = obj.optBoolean("terminada", false),
+            crmUrl = obj.text("crm_url"),
+            avance = obj.text("avance"),
+            publicacion = obj.text("publicacion"),
         )
+    }
+
+    private fun parseFiles(arr: JSONArray?): List<Archivo> {
+        if (arr == null) return emptyList()
+        return (0 until arr.length()).mapNotNull { i ->
+            val o = arr.optJSONObject(i) ?: return@mapNotNull null
+            Archivo(
+                uuid = o.optString("uuid"),
+                tipo = o.text("tipo") ?: "otro",
+                nombre = o.text("nombre") ?: "archivo",
+                tamano = o.optLong("tamano", 0L),
+                subido = o.text("subido"),
+                url = o.text("url"),
+            )
+        }
     }
 }
 
@@ -265,10 +306,15 @@ class Prefs(context: Context) {
         get() = sp.getString("cache", "") ?: ""
         set(v) = sp.edit().putString("cache", v).apply()
 
-    /** Subidas al CRM que no han terminado (sobreviven a cerrar la app). */
+    /** Subidas al CRM que no han terminado (formato anterior; se migra a «uploads»). */
     var pendingUploads: String
         get() = sp.getString("pendingUploads", "[]") ?: "[]"
         set(v) = sp.edit().putString("pendingUploads", v).apply()
+
+    /** Cada archivo que se sube (en fila, subiendo, con error o ya subido), para la pantalla «Subidas». */
+    var uploads: String
+        get() = sp.getString("uploads", "") ?: ""
+        set(v) = sp.edit().putString("uploads", v).apply()
 
     var fontSize: Float
         get() = sp.getFloat("fontSize", 26f)

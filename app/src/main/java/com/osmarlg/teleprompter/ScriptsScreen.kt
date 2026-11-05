@@ -69,7 +69,12 @@ private val Muted = Color(0xFF9CA3AF)
 private val Warn = Color(0xFFFBBF24)
 
 @Composable
-fun ScriptsScreen(prefs: Prefs, onOpen: (Guion) -> Unit) {
+fun ScriptsScreen(
+    prefs: Prefs,
+    onRecord: (Guion) -> Unit,
+    onPiece: (Guion) -> Unit,
+    onUploads: () -> Unit,
+) {
     val scope = rememberCoroutineScope()
     var guiones by remember { mutableStateOf<List<Guion>>(emptyList()) }
     var loading by remember { mutableStateOf(false) }
@@ -80,19 +85,33 @@ fun ScriptsScreen(prefs: Prefs, onOpen: (Guion) -> Unit) {
     var showAll by remember { mutableStateOf(prefs.showAll) }
     var canSeeAll by remember { mutableStateOf(false) }
     var showAccounts by remember { mutableStateOf(false) }
+    var finished by remember { mutableStateOf(false) }
     val sessionVersion = AppEvents.sessionVersion
+
+    // Al terminar de subir todo, recarga: lo que quedó completo pasa a «Terminadas».
+    val uploading = Uploader.activeCount > 0
+    var settledUploads by remember { mutableIntStateOf(AppEvents.uploadsVersion) }
+    LaunchedEffect(uploading, AppEvents.uploadsVersion) {
+        if (!uploading) settledUploads = AppEvents.uploadsVersion
+    }
 
     fun fromCacheOrDemo(): List<Guion> =
         runCatching { GuionParser.parse(prefs.cache) }.getOrNull()?.takeIf { it.isNotEmpty() }
             ?: GuionParser.parse(DEMO_JSON)
 
-    LaunchedEffect(reloadTick, sessionVersion, showAll) {
+    LaunchedEffect(reloadTick, sessionVersion, showAll, finished, settledUploads) {
         val url: String
         val token: String
         when {
             prefs.signedIn -> {
-                url = Crm.guionesUrl(prefs.crmUrl) + if (showAll) "?todos=1" else ""
+                val query = listOfNotNull("todos=1".takeIf { showAll }, "terminadas=1".takeIf { finished })
+                url = Crm.guionesUrl(prefs.crmUrl) + if (query.isEmpty()) "" else "?" + query.joinToString("&")
                 token = prefs.crmToken
+            }
+            finished -> {
+                guiones = emptyList()
+                message = "Inicia sesión con tu usuario del CRM para ver lo ya grabado."
+                return@LaunchedEffect
             }
             prefs.apiUrl.isNotBlank() -> { url = Api.guionesUrl(prefs.apiUrl); token = prefs.apiToken }
             else -> {
@@ -107,11 +126,12 @@ fun ScriptsScreen(prefs: Prefs, onOpen: (Guion) -> Unit) {
             val raw = Api.fetch(url, token)
             val parsed = GuionParser.parse(raw)
             canSeeAll = prefs.signedIn && runCatching { org.json.JSONObject(raw).optBoolean("puede_ver_todos", false) }.getOrDefault(false)
-            prefs.cache = raw
+            if (!finished) prefs.cache = raw
             guiones = parsed
             if (parsed.isEmpty()) {
                 message = when {
                     !prefs.signedIn -> "La API no regresó guiones con tomas."
+                    finished -> "Todavía no hay piezas grabadas en los últimos 60 días."
                     showAll -> "No hay guiones pendientes por grabar."
                     else -> "No tienes guiones pendientes por grabar."
                 }
@@ -122,12 +142,12 @@ fun ScriptsScreen(prefs: Prefs, onOpen: (Guion) -> Unit) {
                 guiones = GuionParser.parse(DEMO_JSON)
                 message = "La sesión se cerró. Vuelve a iniciar sesión en Ajustes."
             } else {
-                guiones = fromCacheOrDemo()
-                message = "${e.message} Mostrando lo último guardado."
+                guiones = if (finished) emptyList() else fromCacheOrDemo()
+                message = if (finished) e.message else "${e.message} Mostrando lo último guardado."
             }
         } catch (e: Exception) {
-            guiones = fromCacheOrDemo()
-            message = "Sin conexión (${e.message}). Mostrando lo último guardado."
+            guiones = if (finished) emptyList() else fromCacheOrDemo()
+            message = if (finished) "Sin conexión (${e.message})." else "Sin conexión (${e.message}). Mostrando lo último guardado."
         } finally {
             loading = false
         }
@@ -152,8 +172,33 @@ fun ScriptsScreen(prefs: Prefs, onOpen: (Guion) -> Unit) {
                         )
                     }
                 }
-                TextButton(onClick = { reloadTick++ }) { Text("⟳ Recargar") }
+                TextButton(onClick = { reloadTick++ }) { Text("⟳") }
                 TextButton(onClick = { showSettings = true }) { Text("⚙ Ajustes") }
+            }
+
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                FilterChip(selected = !finished, onClick = { finished = false }, label = { Text("Por grabar") })
+                FilterChip(selected = finished, onClick = { finished = true; modeFilter = null }, label = { Text("Terminadas") })
+                Spacer(Modifier.weight(1f))
+                val active = Uploader.activeCount
+                val errors = Uploader.errorCount
+                if (Uploader.items.isNotEmpty()) {
+                    Text(
+                        when {
+                            errors > 0 -> "⚠ Subidas ($errors)"
+                            active > 0 -> "↑ Subiendo $active"
+                            else -> "☁ Subidas"
+                        },
+                        color = if (errors > 0) Color(0xFFF87171) else if (active > 0) Warn else Color(0xFF60A5FA),
+                        fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.clip(RoundedCornerShape(50)).clickable(onClick = onUploads)
+                            .background(Color.White.copy(alpha = 0.08f)).padding(horizontal = 10.dp, vertical = 6.dp),
+                    )
+                }
             }
 
             message?.let {
@@ -195,7 +240,9 @@ fun ScriptsScreen(prefs: Prefs, onOpen: (Guion) -> Unit) {
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                items(visible, key = { it.id }) { g -> ScriptCard(g) { onOpen(g) } }
+                items(visible, key = { it.id }) { g ->
+                    ScriptCard(g, onPiece = { onPiece(g) }) { if (g.terminada) onPiece(g) else onRecord(g) }
+                }
             }
         }
     }
@@ -254,7 +301,7 @@ private fun AccountsDialog(prefs: Prefs, onAdd: () -> Unit, onDismiss: () -> Uni
 }
 
 @Composable
-private fun ScriptCard(g: Guion, onClick: () -> Unit) {
+private fun ScriptCard(g: Guion, onPiece: () -> Unit, onClick: () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -286,7 +333,15 @@ private fun ScriptCard(g: Guion, onClick: () -> Unit) {
             Spacer(Modifier.height(4.dp))
             val dur = if (g.duracionTotal > 0) " · ~${g.duracionTotal} s" else ""
             val done = if (g.piezaId != null) " · ${g.hechas}/${g.tomas.size} hechas" else ""
-            Text("${g.tomas.size} tomas$done$dur", fontSize = 13.sp, color = Muted)
+            val state = if (g.terminada) g.estado?.let { " · $it" }.orEmpty() else ""
+            Text("${g.tomas.size} tomas$done$dur$state", fontSize = 13.sp, color = Muted)
+            if (g.archivos > 0) {
+                Text(
+                    "☁ ${g.archivos} archivo(s) en el CRM · ver",
+                    fontSize = 13.sp, color = Color(0xFF60A5FA),
+                    modifier = Modifier.clip(RoundedCornerShape(6.dp)).clickable(onClick = onPiece).padding(vertical = 4.dp),
+                )
+            }
             Spacer(Modifier.height(6.dp))
             val first = g.tomas.first()
             Text(
@@ -333,7 +388,7 @@ private fun SettingsDialog(prefs: Prefs, onDismiss: () -> Unit) {
         password = ""
         authError = null
         AppEvents.sessionVersion++
-        Uploader.resumePending(context, prefs)
+        Uploader.resumePending(context)
         Toast.makeText(context, "Sesión iniciada: ${session.userName}", Toast.LENGTH_SHORT).show()
     }
 
