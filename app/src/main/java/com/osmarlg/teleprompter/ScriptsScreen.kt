@@ -167,12 +167,18 @@ fun ScriptsScreen(prefs: Prefs, onOpen: (Guion) -> Unit) {
                 ) {
                     if (canSeeAll) {
                         FilterChip(
-                            selected = showAll,
-                            onClick = { showAll = !showAll; prefs.showAll = showAll },
-                            label = { Text("Ver de todos") },
+                            selected = !showAll,
+                            onClick = { showAll = false; prefs.showAll = false },
+                            label = { Text("Míos") },
                         )
+                        FilterChip(
+                            selected = showAll,
+                            onClick = { showAll = true; prefs.showAll = true },
+                            label = { Text("De todos") },
+                        )
+                        Spacer(Modifier.width(8.dp))
                     }
-                    FilterChip(selected = modeFilter == null, onClick = { modeFilter = null }, label = { Text("Todos los modos") })
+                    FilterChip(selected = modeFilter == null, onClick = { modeFilter = null }, label = { Text("Todo") })
                     modes.forEach { (mode, label) ->
                         FilterChip(selected = modeFilter == mode, onClick = { modeFilter = mode }, label = { Text(label) })
                     }
@@ -273,6 +279,9 @@ private fun ScriptCard(g: Guion, onClick: () -> Unit) {
             if (meta.isNotBlank()) {
                 Spacer(Modifier.height(2.dp))
                 Text(meta, fontSize = 13.sp, color = Color(0xFF60A5FA))
+            }
+            if (!g.mio && !g.graba.isNullOrBlank()) {
+                Text("Lo graba ${g.graba}", fontSize = 13.sp, color = Warn)
             }
             Spacer(Modifier.height(4.dp))
             val dur = if (g.duracionTotal > 0) " · ~${g.duracionTotal} s" else ""

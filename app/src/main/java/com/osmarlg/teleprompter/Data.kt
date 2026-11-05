@@ -54,6 +54,8 @@ data class Guion(
     val fecha: String? = null,
     val estado: String? = null,
     val mio: Boolean = false,
+    /** Quién lo graba (asignados o «Quién graba sus reels» del cliente). */
+    val graba: String? = null,
 ) {
     val duracionTotal: Int get() = tomas.sumOf { it.duracion }
     val hechas: Int get() = tomas.count { it.hecha }
@@ -128,6 +130,7 @@ object GuionParser {
             fecha = obj.text("fecha"),
             estado = obj.text("estado"),
             mio = obj.optBoolean("mio", false),
+            graba = obj.text("graba"),
         )
     }
 }
